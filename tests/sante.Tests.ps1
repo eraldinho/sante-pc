@@ -298,6 +298,36 @@ Describe 'Identité' {
         $resultat = Get-SanteIdentite
         $resultat.Etat | Should -Be 'NonExécuté'
     }
+
+    It 'complète les champs manquants avec Get-ComputerInfo' {
+        $script:ComputerInfo = [pscustomobject]@{
+            CsModel               = 'OMEN'
+            BiosSMBIOSBIOSVersion = 'F.12'
+            OsName                = 'Windows 11'
+            OsUptime              = [timespan]::FromHours(5)
+        }
+        $resultat = Get-SanteIdentite
+        $resultat.Etat | Should -Be 'OK'
+        $resultat.Message | Should -Match 'OMEN'
+        $resultat.Message | Should -Match 'F\.12'
+        $resultat.Message | Should -Match 'Windows 11'
+        $resultat.Message | Should -Match '0 j 5 h'
+        Should -Invoke -CommandName Get-ComputerInfo -Times 1 -Exactly
+    }
+
+    It 'n appelle pas Get-ComputerInfo quand le CIM a déjà répondu' {
+        $script:CimData['Win32_ComputerSystem'] = [pscustomobject]@{ Model = 'OMEN' }
+        $script:CimData['Win32_BIOS'] = [pscustomobject]@{ SMBIOSBIOSVersion = 'F.12' }
+        $script:CimData['Win32_OperatingSystem'] = [pscustomobject]@{
+            Caption        = 'Windows 11'
+            LastBootUpTime = (Get-Date).AddHours(-5)
+        }
+        $script:InfoThrow = 'Get-ComputerInfo trop lent'
+        $resultat = Get-SanteIdentite
+        $resultat.Etat | Should -Be 'OK'
+        $resultat.Message | Should -Match 'OMEN'
+        Should -Invoke -CommandName Get-ComputerInfo -Times 0 -Exactly
+    }
 }
 
 Describe 'Disque' {

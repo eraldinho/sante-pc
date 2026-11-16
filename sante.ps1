@@ -265,19 +265,21 @@ function Get-SanteIdentite {
             }
         }
         catch { $null = $_.Exception.Message }
-        try {
-            $info = Get-ComputerInfo -ErrorAction Stop
-            if ($info) {
-                if (-not $modele -and $info.CsModel) { $modele = [string]$info.CsModel }
-                if (-not $bios -and $info.BiosSMBIOSBIOSVersion) { $bios = [string]$info.BiosSMBIOSBIOSVersion }
-                if ($info.OsName) { $windows = [string]$info.OsName }
-                if (-not $uptime -and $info.OsUptime) {
-                    $span = [timespan]$info.OsUptime
-                    $uptime = (Format-SanteNombre -Nombre ([math]::Floor($span.TotalDays)) -Modele '{0:0}') + ' j ' + [string]$span.Hours + ' h'
+        if ((-not $modele) -or (-not $bios) -or (-not $windows) -or (-not $uptime)) {
+            try {
+                $info = Get-ComputerInfo -ErrorAction Stop
+                if ($info) {
+                    if (-not $modele -and $info.CsModel) { $modele = [string]$info.CsModel }
+                    if (-not $bios -and $info.BiosSMBIOSBIOSVersion) { $bios = [string]$info.BiosSMBIOSBIOSVersion }
+                    if (-not $windows -and $info.OsName) { $windows = [string]$info.OsName }
+                    if (-not $uptime -and $info.OsUptime) {
+                        $span = [timespan]$info.OsUptime
+                        $uptime = (Format-SanteNombre -Nombre ([math]::Floor($span.TotalDays)) -Modele '{0:0}') + ' j ' + [string]$span.Hours + ' h'
+                    }
                 }
             }
+            catch { $null = $_.Exception.Message }
         }
-        catch { $null = $_.Exception.Message }
         if (-not $modele -and -not $bios -and -not $windows) {
             return New-SanteRow -Controle 'Identité' -Etat 'NonExécuté' -Message 'Identité illisible.'
         }
