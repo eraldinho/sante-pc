@@ -64,7 +64,8 @@ function Install-SanteStubs {
         'Unblock-File'                   = '[CmdletBinding()] param([string]$LiteralPath)'
     }
     foreach ($nom in $signatures.Keys) {
-        if (Get-Command -Name $nom -ErrorAction SilentlyContinue) { continue }
+        # Une fonction passe devant l'applet. Sinon Pester recopie un type généré
+        # dont le nom contient un trait d'union, et Windows PowerShell refuse de l'analyser.
         $corps = "function global:$nom { $($signatures[$nom]) }"
         Invoke-Expression $corps
     }
