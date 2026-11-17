@@ -1,0 +1,59 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.shell }}
+    runs-on: windows-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Modules
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          if (-not (Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue)) {
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force | Out-Null
+          }
+          if (-not (Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue)) {
+            Register-PSRepository -Default
+          }
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -MinimumVersion 1.21.0 -Scope CurrentUser -Force -AllowClobber
+          Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck
+
+      - name: ScriptAnalyzer
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSScriptAnalyzer
+          $resultats = @(Invoke-ScriptAnalyzer -Path .\sante.ps1 -Severity Error)
+          $resultats | Format-Table -AutoSize | Out-String | Write-Host
+          if ($resultats.Count -gt 0) { throw 'PSScriptAnalyzer a signalé des erreurs.' }
+
+      - name: Pester
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module Pester -RequiredVersion 5.7.1 -Force
+          Invoke-Pester -Path .\tests -CI
+
+      - name: Passe rapide
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $chrono = [Diagnostics.Stopwatch]::StartNew()
+          & .\sante.ps1
+          $chrono.Stop()
+          if ($chrono.Elapsed.TotalSeconds -ge 60) {
+            throw ('Passe rapide trop longue : ' + [string]$chrono.Elapsed.TotalSeconds + ' s')
+          }
