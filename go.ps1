@@ -1,4 +1,4 @@
-# Santé PC 1.0.1
+﻿# Santé PC 1.0.1
 # Télécharge sante.ps1 v1.0.0, vérifie l'empreinte figée, puis exécute.
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
 $u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1'
