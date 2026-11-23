@@ -2,17 +2,31 @@
 
 Lecture seule de l'état d'un PC Windows. La passe rapide et la passe complète constatent des traces déjà enregistrées par le système. L'outil ne répare rien et ne teste pas le matériel sous charge.
 
-Version figée : `1.0.0`.
+Version figée : `1.0.1`.
 
-URL canonique, après création du tag `v1.0.0` :
+Commande de lancement, après création du tag `v1.0.1` :
 
-`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1`
+`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1`
 
-Le fichier exécuté est `sante.ps1`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `tests/` et `tools/` ne sont pas chargés par le script.
+Le fichier exécuté reste `sante.ps1` du tag `v1.0.0`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `tests/` et `tools/` ne sont pas chargés par le script.
 
 ## Lancement
 
-La commande supportée télécharge les octets, les compare à l'empreinte publiée, puis exécute. Une empreinte différente interrompt avant toute exécution.
+Passe rapide :
+
+```powershell
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1 | iex
+```
+
+Passe complète :
+
+```powershell
+$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1 | iex
+```
+
+`go.ps1` contient l'empreinte attendue de `sante.ps1` et refuse de l'exécuter si elle ne correspond pas.
+
+La commande longue reste disponible : elle télécharge les octets, les compare à l'empreinte publiée, puis exécute. Une empreinte différente interrompt avant toute exécution.
 
 ```powershell
 $u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1'
@@ -23,9 +37,9 @@ if ($obtenu -ne $attendu) { throw "Empreinte inattendue" }
 iex ([Text.Encoding]::UTF8.GetString($bytes).TrimStart([char]0xFEFF))
 ```
 
-Cette commande lance la passe rapide dans la session courante.
+Cette commande lance aussi la passe rapide dans la session courante.
 
-Pour la passe complète, définir la variable avant le téléchargement :
+Pour la passe complète avec la commande longue, définir la variable avant le téléchargement :
 
 ```powershell
 $env:SANTE_PASSE = 'Complete'
@@ -108,4 +122,4 @@ Le message reprend le code numérique. Le libellé l'accompagne quand il est con
 
 ## Fichiers
 
-`tools/update-hash.ps1` recalcule `sante.ps1.sha256` après une modification de `sante.ps1`. `.gitattributes` fige les octets de `sante.ps1` et de l'empreinte (`-text`), pour que l'empreinte publiée reste celle des octets servis.
+`tools/update-hash.ps1` recalcule `sante.ps1.sha256` après une modification de `sante.ps1`. `.gitattributes` fige les octets de `sante.ps1`, de `go.ps1` et de l'empreinte (`-text`), pour que l'empreinte publiée reste celle des octets servis.

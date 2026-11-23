@@ -2,3 +2,4 @@ sante.ps1 -text
 sante.ps1.sha256 -text
 tests/sante.Tests.ps1 -text
 tools/update-hash.ps1 -text
+go.ps1 -text
