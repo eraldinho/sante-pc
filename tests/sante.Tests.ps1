@@ -162,6 +162,10 @@ BeforeEach {
     $env:SystemDrive = 'C:'
     $env:SANTE_PASSE = $null
     $env:SANTE_RELAUNCHED = $null
+    $env:SANTE_TOKEN = $null
+    $env:SANTE_NO_UPLOAD = $null
+    $env:SANTE_UPLOAD = $null
+    $env:SANTE_LABEL = $null
     $script:CimData = @{}
     $script:WinEvents = @()
     $script:WinThrow = $null
@@ -219,8 +223,8 @@ Describe 'Fichier' {
 
     It 'fige la version et l URL canonique dans le fichier' {
         $texte = [IO.File]::ReadAllText($script:SantePath)
-        $texte | Should -Match '1\.0\.0'
-        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.0\.0/sante\.ps1'
+        $texte | Should -Match '1\.1\.0'
+        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.0/sante\.ps1'
     }
 }
 
@@ -228,8 +232,8 @@ Describe 'Démarrage' {
     It 'affiche la version et l URL canonique' {
         Mock Write-Host { }
         Invoke-SantePc -Passe Rapide | Out-Null
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.0.0' } -Times 1 -Scope It
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.1.0' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1' } -Times 1 -Scope It
     }
 
     It 'un point-source ne lance pas la passe' {
@@ -921,6 +925,166 @@ Describe 'Empreinte' {
         & $outil | Out-Null
         $ligne = [IO.File]::ReadAllText((Join-Path $script:SanteRoot 'sante.ps1.sha256'))
         $ligne.Trim().Split()[0] | Should -Be (Get-FileHash -LiteralPath $script:SantePath -Algorithm SHA256).Hash
+    }
+}
+
+Describe 'Envoi' {
+    It 'masque un chemin de profil et le rapport de batterie' {
+        $ancienNom = $env:USERNAME
+        $ancienProfil = $env:USERPROFILE
+        $ancienTemp = $env:TEMP
+        try {
+            $env:USERNAME = 'alice'
+            $env:USERPROFILE = 'C:\Users\alice'
+            $env:TEMP = 'C:\Users\alice\AppData\Local\Temp'
+            $vu = Protect-SanteMessage -Message 'Rapport : C:\Users\alice\AppData\Local\Temp\sante-battery-report.html et C:\Users\bob\Desktop\note.txt'
+            $vu | Should -Not -Match 'alice'
+            $vu | Should -Not -Match 'bob'
+            $vu | Should -Match 'TEMP\\sante-battery-report\.html'
+            $vu | Should -Match 'C:\\Users\\<user>\\'
+        }
+        finally {
+            $env:USERNAME = $ancienNom
+            $env:USERPROFILE = $ancienProfil
+            $env:TEMP = $ancienTemp
+        }
+    }
+
+    It 'lit le jeton dans l environnement avant l argument, et NoUpload gagne' {
+        $env:SANTE_TOKEN = 'depuis-env'
+        $opt = Get-SanteOptions -Arguments @('-Token', 'depuis-arg', '-Label', 'ArgLabel')
+        $opt.Token | Should -Be 'depuis-env'
+        $opt.Label | Should -Be 'ArgLabel'
+        $env:SANTE_TOKEN = $null
+        $env:SANTE_LABEL = 'EnvLabel'
+        $opt = Get-SanteOptions -Arguments @('-Label', 'ArgLabel', '-NoUpload', '-Upload', '-Token', 'depuis-arg')
+        $opt.Label | Should -Be 'EnvLabel'
+        $opt.NoUpload | Should -BeTrue
+        $opt.Upload | Should -BeFalse
+        $opt.Token | Should -Be 'depuis-arg'
+        $long = Get-SanteOptions -Arguments @('-Label', ('L' * 90))
+        $env:SANTE_LABEL = $null
+        $long = Get-SanteOptions -Arguments @('-Label', ('L' * 90))
+        $long.Label.Length | Should -Be 80
+    }
+
+    It 'affiche le prefixe du jeton sans le secret' {
+        $apercu = Get-SanteApercuJeton -Jeton ('spc_ab12cd34_' + ('s' * 43))
+        $apercu | Should -Be ('spc_ab12' + [string][char]0x2026)
+        $apercu | Should -Not -Match 'ssss'
+    }
+
+    It 'derive machineId de l uuid, puis du serie, puis d un identifiant faible' {
+        $script:CimData['Win32_ComputerSystemProduct'] = [pscustomobject]@{ UUID = 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890' }
+        $script:CimData['Win32_BIOS'] = [pscustomobject]@{ SerialNumber = 'SECRET-SERIAL-99'; SMBIOSBIOSVersion = 'F.12' }
+        $id = Get-SanteMachineId
+        $id.machineId | Should -Match '^[0-9a-f]{64}$'
+        $id.machineIdWeak | Should -BeFalse
+        $id.machineId | Should -Be (Get-SanteSha256Texte -Texte 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890')
+        $id.machineId | Should -Not -Match 'SECRET-SERIAL'
+
+        $script:CimData['Win32_ComputerSystemProduct'] = [pscustomobject]@{ UUID = '00000000-0000-0000-0000-000000000000' }
+        $script:CimData['Win32_BIOS'] = [pscustomobject]@{ SerialNumber = 'ABC123'; SMBIOSBIOSVersion = 'F.12' }
+        $id = Get-SanteMachineId
+        $id.machineIdWeak | Should -BeFalse
+        $id.machineId | Should -Be (Get-SanteSha256Texte -Texte 'ABC123')
+
+        $script:CimData['Win32_ComputerSystemProduct'] = [pscustomobject]@{ UUID = 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF' }
+        $script:CimData['Win32_BIOS'] = [pscustomobject]@{ SerialNumber = 'To Be Filled By O.E.M.'; SMBIOSBIOSVersion = 'F.12' }
+        $script:SanteIdentity = [pscustomobject]@{ model = 'OMEN'; bios = 'F.12'; windows = 'Windows 11'; uptime = '0 j 1 h' }
+        $id = Get-SanteMachineId
+        $id.machineIdWeak | Should -BeTrue
+        $id.machineId | Should -Be (Get-SanteSha256Texte -Texte 'weak|OMEN|F.12|Windows 11')
+    }
+
+    It 'sans jeton, n appelle pas le reseau et ecrit quand meme le JSON' {
+        Mock Invoke-RestMethod { throw 'reseau' }
+        Mock Invoke-WebRequest { throw 'reseau' }
+        $lignes = @(Invoke-SantePc -Passe Rapide)
+        $lignes.Count | Should -BeGreaterThan 0
+        Should -Invoke Invoke-RestMethod -Times 0 -Scope It
+        Should -Invoke Invoke-WebRequest -Times 0 -Scope It
+        $fichier = Get-ChildItem -LiteralPath $env:TEMP -Filter 'sante-pc-report-*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $fichier | Should -Not -BeNullOrEmpty
+        $obj = Get-Content -LiteralPath $fichier.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
+        $obj.schemaVersion | Should -Be 1
+        $obj.scriptVersion | Should -Be '1.1.0'
+        $obj.machineId | Should -Match '^[0-9a-f]{64}$'
+        $obj.pass | Should -Be 'Rapide'
+        $brutDate = [IO.File]::ReadAllText($fichier.FullName)
+        $brutDate | Should -Match '"collectedAt":"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}"'
+        $noms = @($obj.controls | ForEach-Object { $_.controle })
+        foreach ($attendu in @('Identité', 'Disque', 'Batterie', 'Périphériques', 'Pilotes', 'Services', 'Journal', 'Defender', 'SecureBoot', 'CheckHealth', 'Redémarrage', 'ÉchecsPaquets', 'Récapitulatif')) {
+            $noms | Should -Contain $attendu
+        }
+        foreach ($controle in @($obj.controls)) {
+            $controle.etat | Should -BeIn @('OK', 'Attention', 'Erreur', 'NonExécuté')
+        }
+    }
+
+    It 'NoUpload bloque l envoi meme avec un jeton' {
+        $env:SANTE_TOKEN = 'spc_abcd1234_' + ('c' * 43)
+        $env:SANTE_NO_UPLOAD = '1'
+        Mock Invoke-RestMethod { throw 'ne doit pas partir' }
+        Mock Invoke-WebRequest { throw 'ne doit pas partir' }
+        $lignes = @(Invoke-SantePc -Passe Rapide)
+        $lignes.Count | Should -BeGreaterThan 0
+        Should -Invoke Invoke-RestMethod -Times 0 -Scope It
+        Should -Invoke Invoke-WebRequest -Times 0 -Scope It
+    }
+
+    It 'un echec HTTP laisse le JSON local et les objets, sans repeter le jeton' {
+        $jeton = 'spc_abcd1234_' + ('d' * 43)
+        $env:SANTE_TOKEN = $jeton
+        Mock Invoke-RestMethod { throw ('panne ' + $jeton) }
+        Mock Write-Warning { $script:WarnVu = [string]$Message }
+        $script:CimData['Win32_ComputerSystemProduct'] = [pscustomobject]@{ UUID = 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890' }
+        $script:CimData['Win32_BIOS'] = [pscustomobject]@{ SerialNumber = 'SECRET-SERIAL-99'; SMBIOSBIOSVersion = 'F.12' }
+        $lignes = @(Invoke-SantePc -Passe Rapide)
+        $lignes.Count | Should -BeGreaterThan 0
+        ($lignes | Where-Object { $_.Controle -eq 'Récapitulatif' }) | Should -Not -BeNullOrEmpty
+        $script:WarnVu | Should -Not -Match 'dddd'
+        $script:WarnVu | Should -Match 'Envoi non abouti'
+        $fichier = Get-ChildItem -LiteralPath $env:TEMP -Filter 'sante-pc-report-*.json' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        $brut = [IO.File]::ReadAllText($fichier.FullName)
+        $brut | Should -Not -Match 'dddd'
+        $brut | Should -Not -Match 'SECRET-SERIAL-99'
+        $brut | Should -Not -Match 'A1B2C3D4-E5F6-7890-ABCD-EF1234567890'
+        $brut | Should -Match '"schemaVersion":\s*1'
+        Should -Invoke Invoke-RestMethod -Times 1 -Scope It
+    }
+
+    It 'demande TLS 1.2 avant l envoi et affiche le reportId' {
+        $env:SANTE_TOKEN = 'spc_abcd1234_' + ('e' * 43)
+        $script:TlsVu = 0
+        Mock Invoke-RestMethod {
+            $script:TlsVu = [int][Net.ServicePointManager]::SecurityProtocol
+            [pscustomobject]@{ ok = $true; reportId = 'r42'; machineId = 'abc' }
+        }
+        Invoke-SantePc -Passe Rapide | Out-Null
+        ($script:TlsVu -band 3072) | Should -Be 3072
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Envoyé r42' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq ('Destination : ' + $script:SanteIngestUrl) } -Times 1 -Scope It
+    }
+
+    It 'aligne go.ps1 sur la version, l url et l empreinte' {
+        $go = [IO.File]::ReadAllText((Join-Path $script:SanteRoot 'go.ps1'))
+        $go | Should -Match '1\.1\.0'
+        $go | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.0/sante\.ps1'
+        $hash = (Get-FileHash -LiteralPath $script:SantePath -Algorithm SHA256).Hash
+        $go | Should -Match $hash
+        $go | Should -Not -Match '(?m)\A\s*param\s*\('
+        $go | Should -Match '3072'
+        $go | Should -Not -Match 'spc_[A-Za-z0-9_-]{8,}_'
+    }
+
+    It 'ne contient pas de secret dans les fichiers publics' {
+        foreach ($rel in @('sante.ps1', 'go.ps1', 'README.md', 'CHANGELOG.md')) {
+            $contenu = [IO.File]::ReadAllText((Join-Path $script:SanteRoot $rel))
+            $contenu | Should -Not -Match 'BEGIN PRIVATE KEY'
+            $contenu | Should -Not -Match 'AIza'
+            $contenu | Should -Not -Match 'COMPUTERNAME'
+        }
     }
 }
 }

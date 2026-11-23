@@ -2,26 +2,26 @@
 
 Lecture seule de l'état d'un PC Windows. La passe rapide et la passe complète constatent des traces déjà enregistrées par le système. L'outil ne répare rien et ne teste pas le matériel sous charge.
 
-Version figée : `1.0.1`.
+Version figée : `1.1.0`.
 
-Commande de lancement, après création du tag `v1.0.1` :
+Commande de lancement, après création du tag `v1.1.0` :
 
-`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1`
+`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1`
 
-Le fichier exécuté reste `sante.ps1` du tag `v1.0.0`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `tests/` et `tools/` ne sont pas chargés par le script.
+Le fichier exécuté est `sante.ps1` du tag `v1.1.0`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `tests/` et `tools/` ne sont pas chargés par le script.
 
 ## Lancement
 
 Passe rapide :
 
 ```powershell
-irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1 | iex
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
 ```
 
 Passe complète :
 
 ```powershell
-$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.1/go.ps1 | iex
+$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
 ```
 
 `go.ps1` contient l'empreinte attendue de `sante.ps1` et refuse de l'exécuter si elle ne correspond pas.
@@ -29,7 +29,7 @@ $env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/s
 La commande longue reste disponible : elle télécharge les octets, les compare à l'empreinte publiée, puis exécute. Une empreinte différente interrompt avant toute exécution.
 
 ```powershell
-$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1'
+$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1'
 $bytes = (New-Object Net.WebClient).DownloadData($u)
 $attendu = ((New-Object Net.WebClient).DownloadString("$u.sha256")).Trim().Split()[0]
 $obtenu = (Get-FileHash -InputStream ([IO.MemoryStream]::new($bytes)) -Algorithm SHA256).Hash
@@ -45,7 +45,31 @@ Pour la passe complète avec la commande longue, définir la variable avant le t
 $env:SANTE_PASSE = 'Complete'
 ```
 
+
 Sur une copie locale déjà présente : `powershell -File .\sante.ps1 Complete`.
+
+## Envoi vers la console
+
+L'envoi est optionnel. Sans jeton, le script ne contacte pas la console : le tableau local est le seul résultat, comme en 1.0.0. Aucun secret n'est écrit dans `sante.ps1` ni dans `go.ps1`.
+
+```powershell
+$env:SANTE_TOKEN = 'spc_…'
+$env:SANTE_LABEL = 'Atelier 12'
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
+```
+
+Les mêmes réglages existent en arguments, pour une copie locale : `-Token`, `-Label`, `-Upload`, `-NoUpload`. L'environnement l'emporte sur `-Token` et `-Label` quand il est posé. `-NoUpload` ou `$env:SANTE_NO_UPLOAD = '1'` interdit tout envoi, même si un jeton est présent. `-Upload` ou `$env:SANTE_UPLOAD = '1'` demande le jeton en saisie masquée lorsqu'il n'est pas déjà connu.
+
+Le libellé fait au plus 80 caractères. Il sert à reconnaître le PC dans la console, avec le modèle. Le nom d'ordinateur n'est ni lu pour être stocké, ni envoyé.
+
+Avant l'envoi, l'écran affiche la passe, l'état du récapitulatif, le nombre de contrôles, leur état, le `machineId`, le libellé s'il existe, l'adresse de la fonction et seulement le préfixe du jeton. Le rapport JSON est toujours écrit dans `$env:TEMP\sante-pc-report-yyyyMMdd-HHmmss.json`, qu'il y ait envoi ou non. Ce fichier ne contient pas le jeton. Un échec réseau, un refus ou un délai est un avertissement : le tableau et le fichier local restent.
+
+`machineId` est l'empreinte SHA-256 de l'UUID SMBIOS, ou du numéro de série si l'UUID est vide ou générique. Si aucun des deux n'est lisible, l'empreinte porte sur le modèle, le BIOS et le libellé Windows, et elle est marquée peu stable. Le numéro de série et l'UUID ne figurent pas dans le JSON. Les chemins de profil et le HTML de batterie sont masqués dans les messages.
+
+L'adresse d'envoi est `https://sante-pc-eg.web.app/api/ingestReport`. Le script envoie un `POST` JSON, en-tête `Authorization: Bearer`, après avoir activé TLS 1.2. Il n'écrit pas dans Firestore.
+
+Une passe complète élevée reprend le jeton, le libellé et les drapeaux d'envoi par les variables d'environnement du processus administrateur. Le jeton n'est pas placé sur la ligne de commande.
+
 
 La passe complète demande l'administrateur. Sans ces droits, le script copie `sante.ps1` dans `$env:TEMP`, retire la marque du Web (`Unblock-File`) et se relance avec `Start-Process powershell.exe -Verb RunAs -File`. Si la demande est annulée, les contrôles qui exigent l'administrateur restent `NonExécuté`.
 
