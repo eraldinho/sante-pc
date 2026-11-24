@@ -1,10 +1,11 @@
-﻿# Santé PC 1.0.0
+﻿# Santé PC 1.1.0
 # Lecture seule des traces déjà enregistrées par Windows.
 # Pas de paramètre en tête : iex ne le relie pas aux arguments.
 # Le script ne s'arrête pas par un code de sortie : le résultat est l'objet récapitulatif.
 
-$script:SanteVersion = '1.0.0'
-$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.0.0/sante.ps1'
+$script:SanteVersion = '1.1.0'
+$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1'
+$script:SanteIngestUrl = 'https://sante-pc-eg.web.app/api/ingestReport'
 $script:SanteAvertissement = "Un rapport sans trace n'innocente pas le matériel."
 
 function New-SanteRow {
@@ -232,6 +233,7 @@ function Format-SanteHresult {
 function Get-SanteIdentite {
     [CmdletBinding()]
     param()
+    $script:SanteIdentity = [pscustomobject]@{ model = ''; bios = ''; windows = ''; uptime = '' }
     try {
         $modele = ''
         $bios = ''
@@ -279,6 +281,12 @@ function Get-SanteIdentite {
                 }
             }
             catch { $null = $_.Exception.Message }
+        }
+        $script:SanteIdentity = [pscustomobject]@{
+            model   = [string]$modele
+            bios    = [string]$bios
+            windows = [string]$windows
+            uptime  = [string]$uptime
         }
         if (-not $modele -and -not $bios -and -not $windows) {
             return New-SanteRow -Controle 'Identité' -Etat 'NonExécuté' -Message 'Identité illisible.'
@@ -1391,9 +1399,8 @@ function Copy-SanteScriptToTemp {
 
 function Start-SanteElevation {
     [CmdletBinding()]
-    param()
-    $ancienRelance = $env:SANTE_RELAUNCHED
-    $anciennePasse = $env:SANTE_PASSE
+    param($Options)
+    $etat = $null
     try {
         $dest = Copy-SanteScriptToTemp
         try { Unblock-File -LiteralPath $dest -ErrorAction Stop }
@@ -1403,9 +1410,18 @@ function Start-SanteElevation {
             $candidat = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
             if (Test-Path -LiteralPath $candidat -ErrorAction SilentlyContinue) { $exe = $candidat }
         }
-        $env:SANTE_RELAUNCHED = '1'
-        $env:SANTE_PASSE = 'Complete'
+        $etat = Publish-SanteEnvironnementEnfant -Options $Options
         $arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $dest + '" Complete -DejaRelance'
+        if ($null -ne $Options -and $Options.NoUpload) {
+            $arguments = $arguments + ' -NoUpload'
+        }
+        elseif ($null -ne $Options -and $Options.Upload) {
+            $arguments = $arguments + ' -Upload'
+        }
+        if ($null -ne $Options -and $Options.Label) {
+            $propre = ([string]$Options.Label) -replace '["\r\n]', ''
+            if ($propre) { $arguments = $arguments + ' -Label "' + $propre + '"' }
+        }
         Start-Process -FilePath $exe -ArgumentList $arguments -Verb RunAs
         $true
     }
@@ -1413,24 +1429,476 @@ function Start-SanteElevation {
         $false
     }
     finally {
-        $env:SANTE_RELAUNCHED = $ancienRelance
-        $env:SANTE_PASSE = $anciennePasse
+        Restore-SanteEnvironnementEnfant -Etat $etat
+    }
+}
+
+function Protect-SanteMessage {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Message)
+    $texte = [string]$Message
+    if ($env:USERPROFILE) {
+        $texte = $texte.Replace([string]$env:USERPROFILE, 'C:\Users\<user>')
+    }
+    if ($env:TEMP) {
+        $texte = $texte.Replace([string]$env:TEMP, 'TEMP')
+    }
+    if ($env:USERNAME) {
+        $nom = [regex]::Escape([string]$env:USERNAME)
+        $texte = [regex]::Replace($texte, '(?i)(?<=\\)' + $nom + '(?=\\)', '<user>')
+    }
+    $texte = [regex]::Replace($texte, '(?i)[A-Za-z]:\\Users\\[^\\]+\\', 'C:\Users\<user>\')
+    $texte = [regex]::Replace($texte, '(?i)[A-Za-z]:\\[^"\r\n]*sante-battery-report\.html', 'TEMP\sante-battery-report.html')
+    $texte
+}
+
+function Get-SanteHorodatageLocal {
+    [CmdletBinding()]
+    param()
+    [datetimeoffset]::Now.ToString('yyyy-MM-ddTHH:mm:sszzz', [Globalization.CultureInfo]::InvariantCulture)
+}
+
+function Get-SanteSha256Texte {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Texte)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $octets = [Text.Encoding]::UTF8.GetBytes($Texte)
+        $empreinte = $sha.ComputeHash($octets)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($octet in $empreinte) {
+        [void]$parts.Add($octet.ToString('x2'))
+    }
+    -join $parts.ToArray()
+}
+
+function Test-SanteMatiereGenerique {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Valeur)
+    if (-not $Valeur) { return $true }
+    $texte = $Valeur.Trim().ToUpperInvariant()
+    if (-not $texte) { return $true }
+    $connus = @(
+        'TO BE FILLED BY O.E.M.',
+        'TO BE FILLED BY O.E.M',
+        'DEFAULT STRING',
+        'NONE',
+        'NOT SPECIFIED',
+        'SYSTEM SERIAL NUMBER',
+        'CHASSIS SERIAL NUMBER',
+        '0'
+    )
+    foreach ($connu in $connus) {
+        if ($texte -eq $connu) { return $true }
+    }
+    $hex = $texte -replace '[^0-9A-F]', ''
+    if (-not $hex) { return $true }
+    if ($hex -match '^(0+|F+)$') { return $true }
+    $false
+}
+
+function Get-SanteMachineId {
+    [CmdletBinding()]
+    param()
+    $uuid = ''
+    try {
+        $produit = Get-CimInstance -ClassName Win32_ComputerSystemProduct -ErrorAction Stop
+        foreach ($item in @($produit)) {
+            if ($null -eq $item) { continue }
+            if ($item.UUID) { $uuid = [string]$item.UUID }
+        }
+    }
+    catch { $null = $_.Exception.Message }
+    $matiere = ''
+    if (-not (Test-SanteMatiereGenerique -Valeur $uuid)) {
+        $matiere = $uuid.Trim().ToUpperInvariant()
+    }
+    else {
+        $serie = ''
+        try {
+            $biosCim = Get-CimInstance -ClassName Win32_BIOS -ErrorAction Stop
+            foreach ($item in @($biosCim)) {
+                if ($null -eq $item) { continue }
+                if ($item.SerialNumber) { $serie = [string]$item.SerialNumber }
+            }
+        }
+        catch { $null = $_.Exception.Message }
+        if (-not (Test-SanteMatiereGenerique -Valeur $serie)) {
+            $matiere = $serie.Trim().ToUpperInvariant()
+        }
+    }
+    if ($matiere) {
+        return [pscustomobject]@{
+            machineId     = (Get-SanteSha256Texte -Texte $matiere)
+            machineIdWeak = $false
+        }
+    }
+    $modele = ''
+    $biosVersion = ''
+    $windows = ''
+    if ($null -ne $script:SanteIdentity) {
+        $modele = [string]$script:SanteIdentity.model
+        $biosVersion = [string]$script:SanteIdentity.bios
+        $windows = [string]$script:SanteIdentity.windows
+    }
+    $faible = 'weak|' + $modele + '|' + $biosVersion + '|' + $windows
+    [pscustomobject]@{
+        machineId     = (Get-SanteSha256Texte -Texte $faible)
+        machineIdWeak = $true
+    }
+}
+
+function Get-SanteOptions {
+    [CmdletBinding()]
+    param([string[]]$Arguments)
+    $passe = 'Rapide'
+    $jeton = $null
+    $jetonEnv = $false
+    $noUpload = $false
+    $upload = $false
+    $label = $null
+    $labelEnv = $false
+    if ($env:SANTE_PASSE -match '^(?i)complete$') { $passe = 'Complete' }
+    if ($env:SANTE_PASSE -match '^(?i)rapide$') { $passe = 'Rapide' }
+    if ($env:SANTE_TOKEN) {
+        $jeton = [string]$env:SANTE_TOKEN
+        $jetonEnv = $true
+    }
+    if ($env:SANTE_NO_UPLOAD -eq '1') { $noUpload = $true }
+    if ($env:SANTE_UPLOAD -eq '1') { $upload = $true }
+    if ($env:SANTE_LABEL) {
+        $label = [string]$env:SANTE_LABEL
+        $labelEnv = $true
+    }
+    $liste = @($Arguments)
+    $index = 0
+    while ($index -lt $liste.Count) {
+        $texte = [string]$liste[$index]
+        if ($texte -match '^(?i)complete$') { $passe = 'Complete' }
+        elseif ($texte -match '^(?i)rapide$') { $passe = 'Rapide' }
+        elseif ($texte -eq '-DejaRelance') { $env:SANTE_RELAUNCHED = '1' }
+        elseif ($texte -eq '-NoUpload') { $noUpload = $true }
+        elseif ($texte -eq '-Upload') { $upload = $true }
+        elseif ($texte -eq '-Token') {
+            $index = $index + 1
+            if (($index -lt $liste.Count) -and (-not $jetonEnv)) { $jeton = [string]$liste[$index] }
+        }
+        elseif ($texte -eq '-Label') {
+            $index = $index + 1
+            if (($index -lt $liste.Count) -and (-not $labelEnv)) { $label = [string]$liste[$index] }
+        }
+        elseif ($texte -eq '-TokenFile') {
+            $index = $index + 1
+            if ($index -lt $liste.Count) {
+                $cheminJeton = [string]$liste[$index]
+                if ((-not $jeton) -and $cheminJeton -and (Test-Path -LiteralPath $cheminJeton)) {
+                    try {
+                        $jeton = [IO.File]::ReadAllText($cheminJeton).Trim()
+                        Remove-Item -LiteralPath $cheminJeton -Force -ErrorAction SilentlyContinue
+                    }
+                    catch { $null = $_.Exception.Message }
+                }
+            }
+        }
+        $index = $index + 1
+    }
+    if ($null -ne $label) {
+        $label = $label.Trim()
+        if ($label.Length -gt 80) { $label = $label.Substring(0, 80) }
+        if (-not $label) { $label = $null }
+    }
+    if ($noUpload) { $upload = $false }
+    [pscustomobject]@{
+        Passe    = $passe
+        Token    = $jeton
+        NoUpload = [bool]$noUpload
+        Upload   = [bool]$upload
+        Label    = $label
     }
 }
 
 function Get-SantePasseDemandee {
     [CmdletBinding()]
     param([string[]]$Arguments)
-    $passe = 'Rapide'
-    if ($env:SANTE_PASSE -match '^(?i)complete$') { $passe = 'Complete' }
-    if ($env:SANTE_PASSE -match '^(?i)rapide$') { $passe = 'Rapide' }
-    foreach ($argument in @($Arguments)) {
-        $texte = [string]$argument
-        if ($texte -match '^(?i)complete$') { $passe = 'Complete' }
-        if ($texte -match '^(?i)rapide$') { $passe = 'Rapide' }
-        if ($texte -eq '-DejaRelance') { $env:SANTE_RELAUNCHED = '1' }
+    (Get-SanteOptions -Arguments $Arguments).Passe
+}
+
+function Get-SanteApercuJeton {
+    [CmdletBinding()]
+    param([AllowEmptyString()][string]$Jeton)
+    $texte = [string]$Jeton
+    if ($texte -match '^(spc_[A-Za-z0-9_-]{4})') {
+        return ($Matches[1] + [string][char]0x2026)
     }
-    $passe
+    if ($texte.Length -ge 8) { return ($texte.Substring(0, 8) + [string][char]0x2026) }
+    'spc_' + [string][char]0x2026
+}
+
+function New-SanteRapport {
+    [CmdletBinding()]
+    param(
+        $Lignes,
+        [Parameter(Mandatory = $true)][string]$Passe,
+        $Options
+    )
+    $machine = Get-SanteMachineId
+    $label = $null
+    if ($null -ne $Options -and $Options.Label) { $label = [string]$Options.Label }
+    $modele = ''
+    $bios = ''
+    $windows = ''
+    $uptime = ''
+    if ($null -ne $script:SanteIdentity) {
+        $modele = [string]$script:SanteIdentity.model
+        $bios = [string]$script:SanteIdentity.bios
+        $windows = [string]$script:SanteIdentity.windows
+        $uptime = [string]$script:SanteIdentity.uptime
+    }
+    $etatResume = 'NonExécuté'
+    $messageResume = ''
+    $controles = New-Object System.Collections.Generic.List[object]
+    foreach ($ligne in @($Lignes)) {
+        if ($null -eq $ligne) { continue }
+        $messageProtege = Protect-SanteMessage -Message ([string]$ligne.Message)
+        $element = [pscustomobject]@{
+            controle = [string]$ligne.Controle
+            etat     = [string]$ligne.Etat
+            message  = $messageProtege
+        }
+        [void]$controles.Add($element)
+        if ([string]$ligne.Controle -eq 'Récapitulatif') {
+            $etatResume = [string]$ligne.Etat
+            $messageResume = $messageProtege
+        }
+    }
+    $corps = [pscustomobject]@{
+        schemaVersion = 1
+        scriptVersion = [string]$script:SanteVersion
+        collectedAt   = (Get-SanteHorodatageLocal)
+        pass          = $Passe
+        machineId     = [string]$machine.machineId
+        machineIdWeak = [bool]$machine.machineIdWeak
+        label         = $label
+        identity      = [pscustomobject]@{
+            model   = $modele
+            bios    = $bios
+            windows = $windows
+            uptime  = $uptime
+        }
+        summary       = [pscustomobject]@{
+            etat    = $etatResume
+            message = $messageResume
+        }
+        controls      = $controles.ToArray()
+    }
+    $json = ConvertTo-Json -InputObject $corps -Depth 6 -Compress
+    [pscustomobject]@{
+        Json          = [string]$json
+        Pass          = $Passe
+        MachineId     = [string]$machine.machineId
+        MachineIdWeak = [bool]$machine.machineIdWeak
+        Label         = $label
+        SummaryEtat   = $etatResume
+        ControlCount  = $controles.Count
+        Controls      = $controles.ToArray()
+    }
+}
+
+function Save-SanteRapportLocal {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)][string]$Json)
+    try {
+        $dossier = $env:TEMP
+        if (-not $dossier) { $dossier = [IO.Path]::GetTempPath() }
+        $nom = 'sante-pc-report-' + (Get-Date).ToString('yyyyMMdd-HHmmss') + '.json'
+        $chemin = Join-Path $dossier $nom
+        if (Test-Path -LiteralPath $chemin) {
+            $nom = 'sante-pc-report-' + (Get-Date).ToString('yyyyMMdd-HHmmss-fff') + '.json'
+            $chemin = Join-Path $dossier $nom
+        }
+        $encodage = New-Object System.Text.UTF8Encoding $false
+        [IO.File]::WriteAllText($chemin, $Json, $encodage)
+        $chemin
+    }
+    catch {
+        Write-Warning ('Rapport local non écrit : ' + [string]$_.Exception.Message)
+        $null
+    }
+}
+
+function Read-SanteJeton {
+    [CmdletBinding()]
+    param()
+    try {
+        $secure = Read-Host -AsSecureString -Prompt 'Jeton d''enrôlement'
+    }
+    catch {
+        Write-Warning 'Jeton non saisi.'
+        return $null
+    }
+    if ($null -eq $secure -or $secure.Length -eq 0) { return $null }
+    $pointeur = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+    try {
+        [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointeur)
+    }
+    finally {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointeur)
+    }
+}
+
+function Resolve-SanteJetonEnvoi {
+    [CmdletBinding()]
+    param($Options)
+    if ($null -eq $Options) { return $null }
+    if ($Options.NoUpload) { return $null }
+    $jeton = $null
+    if ($Options.Token) { $jeton = ([string]$Options.Token).Trim() }
+    if ((-not $jeton) -and $Options.Upload) {
+        $saisi = Read-SanteJeton
+        if ($saisi) { $jeton = $saisi.Trim() }
+    }
+    if (-not $jeton) { return $null }
+    $jeton
+}
+
+function Write-SanteApercuEnvoi {
+    [CmdletBinding()]
+    param(
+        $Rapport,
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Jeton
+    )
+    Write-Host ('Passe : ' + [string]$Rapport.Pass)
+    Write-Host ('Récapitulatif : ' + [string]$Rapport.SummaryEtat)
+    Write-Host ('Contrôles : ' + [string]$Rapport.ControlCount)
+    $ligneId = 'machineId : ' + [string]$Rapport.MachineId
+    if ($Rapport.Label) { $ligneId = $ligneId + ' — ' + [string]$Rapport.Label }
+    Write-Host $ligneId
+    if ($Rapport.MachineIdWeak) { Write-Host 'Identifiant peu stable' }
+    foreach ($controle in @($Rapport.Controls)) {
+        Write-Host ([string]$controle.controle + ' : ' + [string]$controle.etat)
+    }
+    Write-Host ('Destination : ' + $script:SanteIngestUrl)
+    Write-Host ('Jeton : ' + (Get-SanteApercuJeton -Jeton $Jeton))
+}
+
+function Send-SanteRapport {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Json,
+        [Parameter(Mandatory = $true)][string]$Jeton
+    )
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
+    $encodage = New-Object System.Text.UTF8Encoding $false
+    $corps = $encodage.GetBytes($Json)
+    try {
+        $reponse = Invoke-RestMethod -Uri $script:SanteIngestUrl -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ Authorization = ('Bearer ' + $Jeton) } -Body $corps -TimeoutSec 30
+        $identifiant = ''
+        if ($null -ne $reponse -and $null -ne $reponse.reportId) {
+            $identifiant = [string]$reponse.reportId
+        }
+        Write-Host ('Envoyé ' + $identifiant)
+    }
+    catch {
+        $statut = ''
+        try {
+            if ($null -ne $_.Exception.Response -and $null -ne $_.Exception.Response.StatusCode) {
+                $statut = [string]([int]$_.Exception.Response.StatusCode)
+            }
+        }
+        catch { $statut = '' }
+        $detail = [string]$_.Exception.Message
+        if ($Jeton -and $detail.Contains($Jeton)) {
+            $detail = $detail.Replace($Jeton, (Get-SanteApercuJeton -Jeton $Jeton))
+        }
+        if ($statut) {
+            Write-Warning ('Envoi non abouti (' + $statut + '). ' + $detail)
+        }
+        else {
+            Write-Warning ('Envoi non abouti. ' + $detail)
+        }
+    }
+}
+
+function Publish-SanteEnvironnementEnfant {
+    [CmdletBinding()]
+    param($Options)
+    $anciensProcess = @{
+        SANTE_TOKEN      = $env:SANTE_TOKEN
+        SANTE_LABEL      = $env:SANTE_LABEL
+        SANTE_NO_UPLOAD  = $env:SANTE_NO_UPLOAD
+        SANTE_UPLOAD     = $env:SANTE_UPLOAD
+        SANTE_PASSE      = $env:SANTE_PASSE
+        SANTE_RELAUNCHED = $env:SANTE_RELAUNCHED
+    }
+    $env:SANTE_PASSE = 'Complete'
+    $env:SANTE_RELAUNCHED = '1'
+    if ($null -ne $Options -and $Options.Token) { $env:SANTE_TOKEN = [string]$Options.Token }
+    if ($null -ne $Options -and $Options.Label) { $env:SANTE_LABEL = [string]$Options.Label }
+    if ($null -ne $Options -and $Options.NoUpload) {
+        $env:SANTE_NO_UPLOAD = '1'
+        Remove-Item Env:\SANTE_UPLOAD -ErrorAction SilentlyContinue
+    }
+    elseif ($null -ne $Options -and ($Options.Upload -or $Options.Token)) {
+        Remove-Item Env:\SANTE_NO_UPLOAD -ErrorAction SilentlyContinue
+        if ($Options.Upload) { $env:SANTE_UPLOAD = '1' }
+    }
+    $voulus = @{
+        SANTE_TOKEN      = $env:SANTE_TOKEN
+        SANTE_LABEL      = $env:SANTE_LABEL
+        SANTE_NO_UPLOAD  = $env:SANTE_NO_UPLOAD
+        SANTE_UPLOAD     = $env:SANTE_UPLOAD
+        SANTE_PASSE      = $env:SANTE_PASSE
+        SANTE_RELAUNCHED = $env:SANTE_RELAUNCHED
+    }
+    $anciensUser = @{}
+    foreach ($nom in @($voulus.Keys)) {
+        try {
+            $anciensUser[$nom] = [Environment]::GetEnvironmentVariable($nom, 'User')
+            $valeur = $voulus[$nom]
+            if ($null -eq $valeur -or [string]$valeur -eq '') {
+                [Environment]::SetEnvironmentVariable($nom, $null, 'User')
+            }
+            else {
+                [Environment]::SetEnvironmentVariable($nom, [string]$valeur, 'User')
+            }
+        }
+        catch { $null = $_.Exception.Message }
+    }
+    [pscustomobject]@{
+        Process = $anciensProcess
+        User    = $anciensUser
+    }
+}
+
+function Restore-SanteEnvironnementEnfant {
+    [CmdletBinding()]
+    param($Etat)
+    if ($null -eq $Etat) { return }
+    foreach ($nom in @($Etat.User.Keys)) {
+        try {
+            $valeur = $Etat.User[$nom]
+            if ($null -eq $valeur -or [string]$valeur -eq '') {
+                [Environment]::SetEnvironmentVariable($nom, $null, 'User')
+            }
+            else {
+                [Environment]::SetEnvironmentVariable($nom, [string]$valeur, 'User')
+            }
+        }
+        catch { $null = $_.Exception.Message }
+    }
+    foreach ($nom in @($Etat.Process.Keys)) {
+        $valeur = $Etat.Process[$nom]
+        if ($null -eq $valeur -or [string]$valeur -eq '') {
+            Remove-Item -Path ('Env:\' + $nom) -ErrorAction SilentlyContinue
+        }
+        else {
+            Set-Item -Path ('Env:\' + $nom) -Value ([string]$valeur)
+        }
+    }
 }
 
 function Invoke-SantePc {
@@ -1438,19 +1906,26 @@ function Invoke-SantePc {
     param(
         [ValidateSet('Rapide', 'Complete')]
         [string]$Passe = 'Rapide',
-        [switch]$Relancer
+        [switch]$Relancer,
+        $Options
     )
     $ErrorActionPreference = 'Continue'
     $ProgressPreference = 'SilentlyContinue'
     Write-Host ('Santé PC ' + $script:SanteVersion)
     Write-Host $script:SanteUrl
 
+    if ($null -eq $Options) { $Options = Get-SanteOptions -Arguments @() }
+    if ((-not $Options.NoUpload) -and (-not $Options.Token) -and $Options.Upload) {
+        $saisi = Read-SanteJeton
+        if ($saisi) { $Options.Token = $saisi.Trim() }
+    }
+
     if (($Passe -eq 'Complete') -and $Relancer) {
         $admin = $false
         try { $admin = [bool](Test-SanteAdministrator) }
         catch { $admin = $false }
         if ((-not $admin) -and ($env:SANTE_RELAUNCHED -ne '1')) {
-            $relance = Start-SanteElevation
+            $relance = Start-SanteElevation -Options $Options
             if ($relance) { return }
         }
     }
@@ -1484,6 +1959,20 @@ function Invoke-SantePc {
         Add-SanteLignes $lignes (Get-SanteRapportBatterie)
     }
     Add-SanteLignes $lignes (Get-SanteSummary -Lignes $lignes.ToArray())
+    try {
+        $rapport = New-SanteRapport -Lignes $lignes.ToArray() -Passe $Passe -Options $Options
+        $cheminRapport = Save-SanteRapportLocal -Json $rapport.Json
+        if ($cheminRapport) { Write-Host ('Rapport local : ' + $cheminRapport) }
+        $jetonEnvoi = Resolve-SanteJetonEnvoi -Options $Options
+        if ($jetonEnvoi) {
+            Write-SanteApercuEnvoi -Rapport $rapport -Jeton $jetonEnvoi
+            Send-SanteRapport -Json $rapport.Json -Jeton $jetonEnvoi
+            $jetonEnvoi = $null
+        }
+    }
+    catch {
+        Write-Warning ('Rapport local incomplet : ' + [string]$_.Exception.Message)
+    }
     foreach ($ligne in $lignes) { $ligne }
 }
 
@@ -1500,6 +1989,6 @@ if ($santeInvocation -eq '.') { $santePoint = $true }
 if ($santeLigne -match '^\s*\.\s') { $santePoint = $true }
 if (-not $santePoint) {
     $ErrorActionPreference = 'Continue'
-    $santePasse = Get-SantePasseDemandee -Arguments @($args)
-    Invoke-SantePc -Passe $santePasse -Relancer
+    $santeOptions = Get-SanteOptions -Arguments @($args)
+    Invoke-SantePc -Passe $santeOptions.Passe -Relancer -Options $santeOptions
 }
