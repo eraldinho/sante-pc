@@ -1,4 +1,4 @@
-﻿# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
+# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
 
 Describe 'Santé PC' {
 BeforeAll {
@@ -165,7 +165,9 @@ BeforeEach {
     $env:SANTE_TOKEN = $null
     $env:SANTE_NO_UPLOAD = $null
     $env:SANTE_UPLOAD = $null
+    $env:SANTE_ENVOI = $null
     $env:SANTE_LABEL = $null
+    $env:SANTE_LAUNCH = $null
     $script:CimData = @{}
     $script:WinEvents = @()
     $script:WinThrow = $null
@@ -223,8 +225,8 @@ Describe 'Fichier' {
 
     It 'fige la version et l URL canonique dans le fichier' {
         $texte = [IO.File]::ReadAllText($script:SantePath)
-        $texte | Should -Match '1\.1\.1'
-        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.1/sante\.ps1'
+        $texte | Should -Match '1\.2\.0'
+        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.2\.0/sante\.ps1'
     }
 }
 
@@ -232,8 +234,8 @@ Describe 'Démarrage' {
     It 'affiche la version et l URL canonique' {
         Mock Write-Host { }
         Invoke-SantePc -Passe Rapide | Out-Null
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.1.1' } -Times 1 -Scope It
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.2.0' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/sante.ps1' } -Times 1 -Scope It
     }
 
     It 'un point-source ne lance pas la passe' {
@@ -568,7 +570,7 @@ Describe 'Defender et Secure Boot' {
         }
         $resultat = Get-SanteDefender
         $resultat.Etat | Should -Be 'OK'
-        $resultat.Message | Should -Match '1\.1\.1'
+        $resultat.Message | Should -Match '1\.2\.3'
         $resultat.Message | Should -Match '40\.0'
     }
 
@@ -808,6 +810,9 @@ Describe 'Passe complète' {
         (Get-SanteFichiersProteges -JournalCbs $absent).Etat | Should -Be 'Erreur'
         $script:ProcessusTexte = ''
         (Get-SanteFichiersProteges -JournalCbs $absent).Etat | Should -Be 'NonExécuté'
+        $script:ProcessusTexte = "2026-11-25 18:51:08, Info CSI Corrupt file: C:\windows\System32\drivers\bthmodem.sys"
+        (Get-SanteFichiersProteges -JournalCbs $absent).Etat | Should -Be 'Erreur'
+        (Get-SanteVerdictSfc -Texte 'Corrupt file: bthmodem.sys') | Should -Be 'Erreur'
     }
 
     It 'lit un complément UTF-16 ajouté après le départ' {
@@ -964,6 +969,7 @@ Describe 'Envoi' {
         $opt.Token | Should -Be 'depuis-arg'
         $long = Get-SanteOptions -Arguments @('-Label', ('L' * 90))
         $env:SANTE_LABEL = $null
+    $env:SANTE_LAUNCH = $null
         $long = Get-SanteOptions -Arguments @('-Label', ('L' * 90))
         $long.Label.Length | Should -Be 80
     }
@@ -1008,7 +1014,7 @@ Describe 'Envoi' {
         $fichier | Should -Not -BeNullOrEmpty
         $obj = Get-Content -LiteralPath $fichier.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
         $obj.schemaVersion | Should -Be 1
-        $obj.scriptVersion | Should -Be '1.1.1'
+        $obj.scriptVersion | Should -Be '1.2.0'
         $obj.machineId | Should -Match '^[0-9a-f]{64}$'
         $obj.pass | Should -Be 'Rapide'
         $brutDate = [IO.File]::ReadAllText($fichier.FullName)
@@ -1067,10 +1073,58 @@ Describe 'Envoi' {
         Should -Invoke Write-Host -ParameterFilter { $Object -eq ('Destination : ' + $script:SanteIngestUrl) } -Times 1 -Scope It
     }
 
+    It 'Upload sans jeton envoie le rapport sans Authorization' {
+        $env:SANTE_UPLOAD = '1'
+        Mock Read-SanteJeton { throw 'ne doit pas demander de jeton' }
+        Mock Invoke-RestMethod {
+            $script:EntetesVu = $Headers
+            [pscustomobject]@{ ok = $true; reportId = 'rip'; machineId = 'abc' }
+        }
+        Invoke-SantePc -Passe Rapide | Out-Null
+        Should -Invoke Invoke-RestMethod -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Envoyé rip' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Autorisation : adresse IP publique (liste blanche de la console)' } -Times 1 -Scope It
+        $script:EntetesVu.ContainsKey('Authorization') | Should -BeFalse
+    }
+
+    It 'SANTE_ENVOI est un alias de SANTE_UPLOAD, et un jeton garde Authorization' {
+        $env:SANTE_ENVOI = '1'
+        $opt = Get-SanteOptions -Arguments @()
+        $opt.Upload | Should -BeTrue
+        $env:SANTE_ENVOI = $null
+        $env:SANTE_TOKEN = 'spc_abcd1234_' + ('f' * 43)
+        Mock Invoke-RestMethod {
+            $script:EntetesVu = $Headers
+            [pscustomobject]@{ ok = $true; reportId = 'rtok'; machineId = 'abc' }
+        }
+        Invoke-SantePc -Passe Rapide | Out-Null
+        $script:EntetesVu['Authorization'] | Should -Match '^Bearer spc_abcd1234_'
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Envoyé rtok' } -Times 1 -Scope It
+    }
+
+    It 'SANTE_LAUNCH demande l envoi et pose l en-tête X-Sante-Launch' {
+        $env:SANTE_LAUNCH = 'slc_' + ('ab' * 16)
+        $env:SANTE_LABEL = 'atelier-14'
+        $opt = Get-SanteOptions -Arguments @()
+        $opt.Launch | Should -Be ('slc_' + ('ab' * 16))
+        $opt.Upload | Should -BeTrue
+        $opt.Label | Should -Be 'atelier-14'
+        Mock Invoke-RestMethod {
+            $script:EntetesVu = $Headers
+            [pscustomobject]@{ ok = $true; reportId = 'rlan'; machineId = 'abc' }
+        }
+        Invoke-SantePc -Passe Rapide | Out-Null
+        Should -Invoke Invoke-RestMethod -Times 1 -Scope It
+        $script:EntetesVu.ContainsKey('Authorization') | Should -BeFalse
+        $script:EntetesVu['X-Sante-Launch'] | Should -Be ('slc_' + ('ab' * 16))
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Envoyé rlan' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -like 'Autorisation : identifiant de lancement slc_abababab*' } -Times 1 -Scope It
+    }
+
     It 'aligne go.ps1 sur la version, l url et l empreinte' {
         $go = [IO.File]::ReadAllText((Join-Path $script:SanteRoot 'go.ps1'))
-        $go | Should -Match '1\.1\.1'
-        $go | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.1/sante\.ps1'
+        $go | Should -Match '1\.2\.0'
+        $go | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.2\.0/sante\.ps1'
         $hash = (Get-FileHash -LiteralPath $script:SantePath -Algorithm SHA256).Hash
         $go | Should -Match $hash
         $go | Should -Not -Match '(?m)\A\s*param\s*\('
