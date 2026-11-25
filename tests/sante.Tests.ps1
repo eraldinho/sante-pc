@@ -1,4 +1,4 @@
-# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
+﻿# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
 
 Describe 'Santé PC' {
 BeforeAll {
