@@ -1,5 +1,11 @@
 # Journal
 
+## v1.1.1
+
+- Corrige le lancement `irm …/go.ps1 | iex` sous Windows PowerShell 5.1 : `go.ps1` est désormais en UTF-8 sans BOM, pour que le caractère BOM ne soit plus interprété comme une commande.
+- `sante.ps1` conserve son BOM UTF-8, afin qu'une exécution locale (`powershell -File`) lise correctement les accents. `go.ps1` retire déjà ce BOM avant `iex`.
+
+
 ## v1.1.0
 
 - Envoi optionnel du rapport vers la console Santé PC. Sans jeton, la passe reste locale, comme en 1.0.0.

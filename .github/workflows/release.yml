@@ -1,0 +1,56 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub release if the version tag is new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ver="$(python3 -c "
+          from pathlib import Path
+          import re
+          text = Path('sante.ps1').read_bytes().decode('utf-8-sig')
+          match = re.search(r\"\\\$script:SanteVersion = '([^']+)'\", text)
+          if not match:
+              raise SystemExit('SanteVersion introuvable')
+          print(match.group(1))
+          ")"
+          tag="v${ver}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release ${tag} already exists"
+            exit 0
+          fi
+          notes="$(python3 -c "
+          from pathlib import Path
+          import sys
+          tag = sys.argv[1]
+          heading = '## ' + tag
+          lines = Path('CHANGELOG.md').read_text(encoding='utf-8').splitlines()
+          body = []
+          in_section = False
+          for line in lines:
+              if line.strip() == heading:
+                  in_section = True
+                  continue
+              if in_section and line.startswith('## '):
+                  break
+              if in_section:
+                  body.append(line)
+          text = '\n'.join(body).strip()
+          if not text:
+              text = 'Santé PC ' + tag
+          print(text)
+          " "$tag")"
+          gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --notes "$notes"

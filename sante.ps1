@@ -1,10 +1,10 @@
-﻿# Santé PC 1.1.0
+# Santé PC 1.1.1
 # Lecture seule des traces déjà enregistrées par Windows.
 # Pas de paramètre en tête : iex ne le relie pas aux arguments.
 # Le script ne s'arrête pas par un code de sortie : le résultat est l'objet récapitulatif.
 
-$script:SanteVersion = '1.1.0'
-$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1'
+$script:SanteVersion = '1.1.1'
+$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1'
 $script:SanteIngestUrl = 'https://sante-pc-eg.web.app/api/ingestReport'
 $script:SanteAvertissement = "Un rapport sans trace n'innocente pas le matériel."
 

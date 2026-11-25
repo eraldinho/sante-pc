@@ -1,4 +1,4 @@
-﻿# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
+# Tests Pester 5 de Santé PC. Ce fichier n'est jamais chargé par sante.ps1.
 
 Describe 'Santé PC' {
 BeforeAll {
@@ -223,8 +223,8 @@ Describe 'Fichier' {
 
     It 'fige la version et l URL canonique dans le fichier' {
         $texte = [IO.File]::ReadAllText($script:SantePath)
-        $texte | Should -Match '1\.1\.0'
-        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.0/sante\.ps1'
+        $texte | Should -Match '1\.1\.1'
+        $texte | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.1/sante\.ps1'
     }
 }
 
@@ -232,8 +232,8 @@ Describe 'Démarrage' {
     It 'affiche la version et l URL canonique' {
         Mock Write-Host { }
         Invoke-SantePc -Passe Rapide | Out-Null
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.1.0' } -Times 1 -Scope It
-        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'Santé PC 1.1.1' } -Times 1 -Scope It
+        Should -Invoke Write-Host -ParameterFilter { $Object -eq 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1' } -Times 1 -Scope It
     }
 
     It 'un point-source ne lance pas la passe' {
@@ -1008,7 +1008,7 @@ Describe 'Envoi' {
         $fichier | Should -Not -BeNullOrEmpty
         $obj = Get-Content -LiteralPath $fichier.FullName -Raw -Encoding UTF8 | ConvertFrom-Json
         $obj.schemaVersion | Should -Be 1
-        $obj.scriptVersion | Should -Be '1.1.0'
+        $obj.scriptVersion | Should -Be '1.1.1'
         $obj.machineId | Should -Match '^[0-9a-f]{64}$'
         $obj.pass | Should -Be 'Rapide'
         $brutDate = [IO.File]::ReadAllText($fichier.FullName)
@@ -1069,13 +1069,24 @@ Describe 'Envoi' {
 
     It 'aligne go.ps1 sur la version, l url et l empreinte' {
         $go = [IO.File]::ReadAllText((Join-Path $script:SanteRoot 'go.ps1'))
-        $go | Should -Match '1\.1\.0'
-        $go | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.0/sante\.ps1'
+        $go | Should -Match '1\.1\.1'
+        $go | Should -Match 'https://raw\.githubusercontent\.com/eraldinho/sante-pc/v1\.1\.1/sante\.ps1'
         $hash = (Get-FileHash -LiteralPath $script:SantePath -Algorithm SHA256).Hash
         $go | Should -Match $hash
         $go | Should -Not -Match '(?m)\A\s*param\s*\('
         $go | Should -Match '3072'
         $go | Should -Not -Match 'spc_[A-Za-z0-9_-]{8,}_'
+    }
+
+    It 'est en UTF-8 sans BOM pour irm | iex sous Windows PowerShell 5.1' {
+        $chemin = Join-Path $script:SanteRoot 'go.ps1'
+        $octets = [IO.File]::ReadAllBytes($chemin)
+        $octets[0] | Should -Not -Be 0xEF
+        $texte = [Text.Encoding]::UTF8.GetString($octets)
+        $texte[0] | Should -Not -Be ([char]0xFEFF)
+        $texte | Should -Match "`r`n"
+        [regex]::IsMatch($texte, "(?<!`r)`n") | Should -BeFalse
+        { [scriptblock]::Create($texte) } | Should -Not -Throw
     }
 
     It 'ne contient pas de secret dans les fichiers publics' {

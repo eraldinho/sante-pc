@@ -2,26 +2,26 @@
 
 Lecture seule de l'état d'un PC Windows. La passe rapide et la passe complète constatent des traces déjà enregistrées par le système. L'outil ne répare rien et ne teste pas le matériel sous charge.
 
-Version figée : `1.1.0`.
+Version figée : `1.1.1`.
 
-Commande de lancement, après création du tag `v1.1.0` :
+Commande de lancement, après création du tag `v1.1.1` :
 
-`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1`
+`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1`
 
-Le fichier exécuté est `sante.ps1` du tag `v1.1.0`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `tests/` et `tools/` ne sont pas chargés par le script.
+Le fichier exécuté est `sante.ps1` du tag `v1.1.1`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `sante.ps1` conserve ce BOM pour qu'une exécution locale (`powershell -File`) lise correctement les accents sous Windows PowerShell 5.1. `go.ps1` est en UTF-8 sans BOM, afin que `irm … | iex` n'interprète pas le BOM comme une commande ; il retire le BOM de `sante.ps1` avant `iex`. `tests/` et `tools/` ne sont pas chargés par le script.
 
 ## Lancement
 
 Passe rapide :
 
 ```powershell
-irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
 ```
 
 Passe complète :
 
 ```powershell
-$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
+$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
 ```
 
 `go.ps1` contient l'empreinte attendue de `sante.ps1` et refuse de l'exécuter si elle ne correspond pas.
@@ -29,7 +29,7 @@ $env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/s
 La commande longue reste disponible : elle télécharge les octets, les compare à l'empreinte publiée, puis exécute. Une empreinte différente interrompt avant toute exécution.
 
 ```powershell
-$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/sante.ps1'
+$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1'
 $bytes = (New-Object Net.WebClient).DownloadData($u)
 $attendu = ((New-Object Net.WebClient).DownloadString("$u.sha256")).Trim().Split()[0]
 $obtenu = (Get-FileHash -InputStream ([IO.MemoryStream]::new($bytes)) -Algorithm SHA256).Hash
@@ -55,7 +55,7 @@ L'envoi est optionnel. Sans jeton, le script ne contacte pas la console : le tab
 ```powershell
 $env:SANTE_TOKEN = 'spc_…'
 $env:SANTE_LABEL = 'Atelier 12'
-irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.0/go.ps1 | iex
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
 ```
 
 Les mêmes réglages existent en arguments, pour une copie locale : `-Token`, `-Label`, `-Upload`, `-NoUpload`. L'environnement l'emporte sur `-Token` et `-Label` quand il est posé. `-NoUpload` ou `$env:SANTE_NO_UPLOAD = '1'` interdit tout envoi, même si un jeton est présent. `-Upload` ou `$env:SANTE_UPLOAD = '1'` demande le jeton en saisie masquée lorsqu'il n'est pas déjà connu.
