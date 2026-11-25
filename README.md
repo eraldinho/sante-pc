@@ -2,26 +2,26 @@
 
 Lecture seule de l'état d'un PC Windows. La passe rapide et la passe complète constatent des traces déjà enregistrées par le système. L'outil ne répare rien et ne teste pas le matériel sous charge.
 
-Version figée : `1.1.1`.
+Version figée : `1.2.0`.
 
-Commande de lancement, après création du tag `v1.1.1` :
+Commande de lancement, après création du tag `v1.2.0` :
 
-`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1`
+`https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/go.ps1`
 
-Le fichier exécuté est `sante.ps1` du tag `v1.1.1`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `sante.ps1` conserve ce BOM pour qu'une exécution locale (`powershell -File`) lise correctement les accents sous Windows PowerShell 5.1. `go.ps1` est en UTF-8 sans BOM, afin que `irm … | iex` n'interprète pas le BOM comme une commande ; il retire le BOM de `sante.ps1` avant `iex`. `tests/` et `tools/` ne sont pas chargés par le script.
+Le fichier exécuté est `sante.ps1` du tag `v1.2.0`. `sante.ps1.sha256` contient l'empreinte SHA-256 de ses octets, BOM compris, sous la forme `<HASH>  sante.ps1`. `sante.ps1` conserve ce BOM pour qu'une exécution locale (`powershell -File`) lise correctement les accents sous Windows PowerShell 5.1. `go.ps1` est en UTF-8 sans BOM, afin que `irm … | iex` n'interprète pas le BOM comme une commande ; il retire le BOM de `sante.ps1` avant `iex`. `tests/` et `tools/` ne sont pas chargés par le script.
 
 ## Lancement
 
 Passe rapide :
 
 ```powershell
-irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/go.ps1 | iex
 ```
 
 Passe complète :
 
 ```powershell
-$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
+$env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/go.ps1 | iex
 ```
 
 `go.ps1` contient l'empreinte attendue de `sante.ps1` et refuse de l'exécuter si elle ne correspond pas.
@@ -29,7 +29,7 @@ $env:SANTE_PASSE = 'Complete'; irm https://raw.githubusercontent.com/eraldinho/s
 La commande longue reste disponible : elle télécharge les octets, les compare à l'empreinte publiée, puis exécute. Une empreinte différente interrompt avant toute exécution.
 
 ```powershell
-$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1'
+$u = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/sante.ps1'
 $bytes = (New-Object Net.WebClient).DownloadData($u)
 $attendu = ((New-Object Net.WebClient).DownloadString("$u.sha256")).Trim().Split()[0]
 $obtenu = (Get-FileHash -InputStream ([IO.MemoryStream]::new($bytes)) -Algorithm SHA256).Hash
@@ -50,23 +50,37 @@ Sur une copie locale déjà présente : `powershell -File .\sante.ps1 Complete`.
 
 ## Envoi vers la console
 
-L'envoi est optionnel. Sans jeton, le script ne contacte pas la console : le tableau local est le seul résultat, comme en 1.0.0. Aucun secret n'est écrit dans `sante.ps1` ni dans `go.ps1`.
+L'envoi est optionnel et n'a lieu que s'il est demandé. Sans jeton et sans demande d'envoi, le script ne contacte pas la console : le tableau local est le seul résultat, comme en 1.0.0. Aucun secret n'est écrit dans `sante.ps1` ni dans `go.ps1`.
+
+Avec un jeton :
 
 ```powershell
 $env:SANTE_TOKEN = 'spc_…'
 $env:SANTE_LABEL = 'Atelier 12'
-irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/go.ps1 | iex
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/go.ps1 | iex
 ```
 
-Les mêmes réglages existent en arguments, pour une copie locale : `-Token`, `-Label`, `-Upload`, `-NoUpload`. L'environnement l'emporte sur `-Token` et `-Label` quand il est posé. `-NoUpload` ou `$env:SANTE_NO_UPLOAD = '1'` interdit tout envoi, même si un jeton est présent. `-Upload` ou `$env:SANTE_UPLOAD = '1'` demande le jeton en saisie masquée lorsqu'il n'est pas déjà connu.
+Sans jeton, depuis une adresse IP publique inscrite dans Réglages de la console (le serveur décide) :
+
+```powershell
+$env:SANTE_UPLOAD = '1'
+$env:SANTE_LABEL = 'Atelier 12'
+irm https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/go.ps1 | iex
+```
+
+`$env:SANTE_ENVOI = '1'` est un alias de `$env:SANTE_UPLOAD`. Les mêmes réglages existent en arguments, pour une copie locale : `-Token`, `-Label`, `-Upload`, `-NoUpload`. L'environnement l'emporte sur `-Token` et `-Label` quand il est posé. `-NoUpload` ou `$env:SANTE_NO_UPLOAD = '1'` interdit tout envoi, même si un jeton est présent ou si l'adresse IP est autorisée. `-Upload` ou `$env:SANTE_UPLOAD = '1'` demande l'envoi : avec un jeton s'il est déjà connu, sinon sans jeton, l'autorisation se faisant alors par l'adresse IP publique du PC.
+
+
+Depuis une adresse publique autorisée, la page « Lancer une analyse » de la console (`/lancer`) prépare le lancement : elle réserve une référence unique, puis propose un fichier `.cmd` à double-cliquer ou une commande unique à coller dans Win+R. Le lanceur pose `$env:SANTE_LAUNCH`, `$env:SANTE_LABEL` et les options cochées, puis exécute `go.ps1` de cette version. L'envoi s'attache à la référence réservée. L'identifiant de lancement n'est valable qu'une fois, pendant deux heures.
+
 
 Le libellé fait au plus 80 caractères. Il sert à reconnaître le PC dans la console, avec le modèle. Le nom d'ordinateur n'est ni lu pour être stocké, ni envoyé.
 
-Avant l'envoi, l'écran affiche la passe, l'état du récapitulatif, le nombre de contrôles, leur état, le `machineId`, le libellé s'il existe, l'adresse de la fonction et seulement le préfixe du jeton. Le rapport JSON est toujours écrit dans `$env:TEMP\sante-pc-report-yyyyMMdd-HHmmss.json`, qu'il y ait envoi ou non. Ce fichier ne contient pas le jeton. Un échec réseau, un refus ou un délai est un avertissement : le tableau et le fichier local restent.
+Avant l'envoi, l'écran affiche la passe, l'état du récapitulatif, le nombre de contrôles, leur état, le `machineId`, le libellé s'il existe, l'adresse de la fonction, et soit le préfixe du jeton, soit la mention que l'autorisation passe par l'adresse IP. Le rapport JSON est toujours écrit dans `$env:TEMP\sante-pc-report-yyyyMMdd-HHmmss.json`, qu'il y ait envoi ou non. Ce fichier ne contient pas le jeton. Un échec réseau, un refus ou un délai est un avertissement : le tableau et le fichier local restent. Chaque envoi réussi est conservé dans l'historique du PC sur la console (un rapport par exécution, identifié par le `machineId`).
 
 `machineId` est l'empreinte SHA-256 de l'UUID SMBIOS, ou du numéro de série si l'UUID est vide ou générique. Si aucun des deux n'est lisible, l'empreinte porte sur le modèle, le BIOS et le libellé Windows, et elle est marquée peu stable. Le numéro de série et l'UUID ne figurent pas dans le JSON. Les chemins de profil et le HTML de batterie sont masqués dans les messages.
 
-L'adresse d'envoi est `https://sante-pc-eg.web.app/api/ingestReport`. Le script envoie un `POST` JSON, en-tête `Authorization: Bearer`, après avoir activé TLS 1.2. Il n'écrit pas dans Firestore.
+L'adresse d'envoi est `https://sante-pc-eg.web.app/api/ingestReport`. Le script envoie un `POST` JSON après avoir activé TLS 1.2, avec l'en-tête `Authorization: Bearer` seulement si un jeton est présent, ou `X-Sante-Launch` si un identifiant de lancement a été fourni (`$env:SANTE_LAUNCH` ou `-Launch`). Il n'écrit pas dans Firestore.
 
 Une passe complète élevée reprend le jeton, le libellé et les drapeaux d'envoi par les variables d'environnement du processus administrateur. Le jeton n'est pas placé sur la ligne de commande.
 

@@ -1,5 +1,13 @@
 # Journal
 
+## v1.2.0
+
+- Envoi sans jeton, sur option (`-Upload`, `$env:SANTE_UPLOAD = '1'` ou `$env:SANTE_ENVOI = '1'`), si l'adresse IP publique du PC est inscrite dans la console. Le jeton reste pris en charge. Sans demande d'envoi, le script ne contacte pas la console.
+- Identifiant de lancement (`$env:SANTE_LAUNCH` ou `-Launch`) émis par la page atelier de la console : le rapport s'attache à la référence réservée.
+- `FichiersProtégés` reconnaît aussi un `Corrupt file` dans le journal CBS, au lieu de le laisser en NonExécuté.
+- Les contrôles d'événements (Arrêts, PiloteNonChargé, etc.) essaient chaque nom de fournisseur séparément, pour ne pas échouer si un alias comme `Kernel-Power` est absent.
+- Chaque exécution envoyée est conservée dans l'historique du PC sur la console.
+
 ## v1.1.1
 
 - Corrige le lancement `irm …/go.ps1 | iex` sous Windows PowerShell 5.1 : `go.ps1` est désormais en UTF-8 sans BOM, pour que le caractère BOM ne soit plus interprété comme une commande.
