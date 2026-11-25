@@ -18,15 +18,36 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          ver="$(python3 -c "
+          python3 - <<'PY'
           from pathlib import Path
-          import re
-          text = Path('sante.ps1').read_bytes().decode('utf-8-sig')
-          match = re.search(r\"\\\$script:SanteVersion = '([^']+)'\", text)
+          import hashlib, re, sys
+
+          def fail(msg):
+              print(msg, file=sys.stderr)
+              sys.exit(1)
+
+          sante = Path('sante.ps1').read_bytes()
+          if sante[:3] != b'\xef\xbb\xbf':
+              fail('sante.ps1 doit commencer par un BOM UTF-8 ; release annulée.')
+          if sante.count(b'\n') != sante.count(b'\r\n'):
+              fail('sante.ps1 doit être en CRLF ; release annulée.')
+          digest = hashlib.sha256(sante).hexdigest().upper()
+          published = Path('sante.ps1.sha256').read_text(encoding='ascii').strip().split()[0]
+          if digest != published:
+              fail(f'Empreinte incohérente : fichier {digest}, publié {published}.')
+          go = Path('go.ps1').read_bytes()
+          if go[:3] == b'\xef\xbb\xbf':
+              fail('go.ps1 ne doit pas avoir de BOM ; release annulée.')
+          if digest not in go.decode('utf-8'):
+              fail('go.ps1 ne contient pas l empreinte de sante.ps1 ; release annulée.')
+          text = sante.decode('utf-8-sig')
+          match = re.search(r"\$script:SanteVersion = '([^']+)'", text)
           if not match:
-              raise SystemExit('SanteVersion introuvable')
-          print(match.group(1))
-          ")"
+              fail('SanteVersion introuvable.')
+          Path('/tmp/sante-version').write_text(match.group(1), encoding='ascii')
+          print('intégrité ok', match.group(1), digest)
+          PY
+          ver="$(cat /tmp/sante-version)"
           tag="v${ver}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release ${tag} already exists"
