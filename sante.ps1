@@ -1,10 +1,10 @@
-﻿# Santé PC 1.1.1
+# Santé PC 1.2.0
 # Lecture seule des traces déjà enregistrées par Windows.
 # Pas de paramètre en tête : iex ne le relie pas aux arguments.
 # Le script ne s'arrête pas par un code de sortie : le résultat est l'objet récapitulatif.
 
-$script:SanteVersion = '1.1.1'
-$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.1.1/sante.ps1'
+$script:SanteVersion = '1.2.0'
+$script:SanteUrl = 'https://raw.githubusercontent.com/eraldinho/sante-pc/v1.2.0/sante.ps1'
 $script:SanteIngestUrl = 'https://sante-pc-eg.web.app/api/ingestReport'
 $script:SanteAvertissement = "Un rapport sans trace n'innocente pas le matériel."
 
@@ -144,7 +144,32 @@ function Get-SanteWinEvent {
         LogName   = $Journal
         StartTime = $seuil
     }
-    if ($Fournisseur -and @($Fournisseur).Count -gt 0) { $filtre['ProviderName'] = @($Fournisseur) }
+    $noms = @()
+    if ($Fournisseur) { $noms = @($Fournisseur | Where-Object { $_ }) }
+    if ($noms.Count -gt 1) {
+        $vus = New-Object 'System.Collections.Generic.HashSet[string]'
+        $collecte = New-Object System.Collections.Generic.List[object]
+        $refus = $null
+        foreach ($nom in $noms) {
+            try {
+                foreach ($evenement in @(Get-SanteWinEvent -Journal $Journal -Fournisseur @($nom) -Identifiant $Identifiant -Niveau $Niveau -Heures $Heures -Max $Max)) {
+                    if ($null -eq $evenement) { continue }
+                    $cle = [string]$evenement.RecordId
+                    if ($cle -and -not $vus.Add($cle)) { continue }
+                    [void]$collecte.Add($evenement)
+                    if ($collecte.Count -ge $Max) { break }
+                }
+            }
+            catch {
+                if (Test-SanteAucunEvenement $_) { }
+                else { $refus = $_ }
+            }
+            if ($collecte.Count -ge $Max) { break }
+        }
+        if ($collecte.Count -eq 0 -and $null -ne $refus) { throw $refus }
+        return $collecte.ToArray()
+    }
+    if ($noms.Count -eq 1) { $filtre['ProviderName'] = $noms[0] }
     if ($Identifiant -and @($Identifiant).Count -gt 0) { $filtre['Id'] = @($Identifiant) }
     if ($Niveau -and @($Niveau).Count -gt 0) { $filtre['Level'] = @($Niveau) }
     try {
@@ -1198,7 +1223,7 @@ function Get-SanteVerdictSfc {
     if ($Texte -match '(?i)did not find any integrity violations|n.a trouv. aucune violation|aucune violation d.int.grit') {
         return 'OK'
     }
-    if ($Texte -match '(?i)found integrity violations|found corrupt files|a trouv. des violations|fichiers endommag') {
+    if ($Texte -match '(?i)found integrity violations|found corrupt files|corrupt file|a trouv. des violations|fichiers endommag|fichier(s)? endommag|fichier corrompu') {
         return 'Erreur'
     }
     'NonExécuté'
@@ -1562,6 +1587,8 @@ function Get-SanteOptions {
     $upload = $false
     $label = $null
     $labelEnv = $false
+    $launch = $null
+    $launchEnv = $false
     if ($env:SANTE_PASSE -match '^(?i)complete$') { $passe = 'Complete' }
     if ($env:SANTE_PASSE -match '^(?i)rapide$') { $passe = 'Rapide' }
     if ($env:SANTE_TOKEN) {
@@ -1570,9 +1597,14 @@ function Get-SanteOptions {
     }
     if ($env:SANTE_NO_UPLOAD -eq '1') { $noUpload = $true }
     if ($env:SANTE_UPLOAD -eq '1') { $upload = $true }
+    if ($env:SANTE_ENVOI -eq '1') { $upload = $true }
     if ($env:SANTE_LABEL) {
         $label = [string]$env:SANTE_LABEL
         $labelEnv = $true
+    }
+    if ($env:SANTE_LAUNCH) {
+        $launch = [string]$env:SANTE_LAUNCH
+        $launchEnv = $true
     }
     $liste = @($Arguments)
     $index = 0
@@ -1590,6 +1622,10 @@ function Get-SanteOptions {
         elseif ($texte -eq '-Label') {
             $index = $index + 1
             if (($index -lt $liste.Count) -and (-not $labelEnv)) { $label = [string]$liste[$index] }
+        }
+        elseif ($texte -eq '-Launch') {
+            $index = $index + 1
+            if (($index -lt $liste.Count) -and (-not $launchEnv)) { $launch = [string]$liste[$index] }
         }
         elseif ($texte -eq '-TokenFile') {
             $index = $index + 1
@@ -1611,13 +1647,19 @@ function Get-SanteOptions {
         if ($label.Length -gt 80) { $label = $label.Substring(0, 80) }
         if (-not $label) { $label = $null }
     }
+    if ($null -ne $launch) {
+        $launch = $launch.Trim()
+        if (-not $launch) { $launch = $null }
+    }
     if ($noUpload) { $upload = $false }
+    elseif ($launch) { $upload = $true }
     [pscustomobject]@{
         Passe    = $passe
         Token    = $jeton
         NoUpload = [bool]$noUpload
         Upload   = [bool]$upload
         Label    = $label
+        Launch   = $launch
     }
 }
 
@@ -1750,6 +1792,16 @@ function Read-SanteJeton {
     }
 }
 
+function Test-SanteEnvoiDemande {
+    [CmdletBinding()]
+    param($Options)
+    if ($null -eq $Options) { return $false }
+    if ($Options.NoUpload) { return $false }
+    if ($Options.Token) { return $true }
+    if ($Options.Launch) { return $true }
+    [bool]$Options.Upload
+}
+
 function Resolve-SanteJetonEnvoi {
     [CmdletBinding()]
     param($Options)
@@ -1757,10 +1809,6 @@ function Resolve-SanteJetonEnvoi {
     if ($Options.NoUpload) { return $null }
     $jeton = $null
     if ($Options.Token) { $jeton = ([string]$Options.Token).Trim() }
-    if ((-not $jeton) -and $Options.Upload) {
-        $saisi = Read-SanteJeton
-        if ($saisi) { $jeton = $saisi.Trim() }
-    }
     if (-not $jeton) { return $null }
     $jeton
 }
@@ -1769,7 +1817,8 @@ function Write-SanteApercuEnvoi {
     [CmdletBinding()]
     param(
         $Rapport,
-        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Jeton
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Jeton,
+        [AllowEmptyString()][string]$Launch
     )
     Write-Host ('Passe : ' + [string]$Rapport.Pass)
     Write-Host ('Récapitulatif : ' + [string]$Rapport.SummaryEtat)
@@ -1782,20 +1831,34 @@ function Write-SanteApercuEnvoi {
         Write-Host ([string]$controle.controle + ' : ' + [string]$controle.etat)
     }
     Write-Host ('Destination : ' + $script:SanteIngestUrl)
-    Write-Host ('Jeton : ' + (Get-SanteApercuJeton -Jeton $Jeton))
+    if ($Jeton) {
+        Write-Host ('Jeton : ' + (Get-SanteApercuJeton -Jeton $Jeton))
+    }
+    elseif ($Launch) {
+        $apercu = [string]$Launch
+        if ($apercu.Length -gt 12) { $apercu = $apercu.Substring(0, 12) + [string][char]0x2026 }
+        Write-Host ('Autorisation : identifiant de lancement ' + $apercu)
+    }
+    else {
+        Write-Host 'Autorisation : adresse IP publique (liste blanche de la console)'
+    }
 }
 
 function Send-SanteRapport {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$Json,
-        [Parameter(Mandatory = $true)][string]$Jeton
+        [AllowEmptyString()][string]$Jeton,
+        [AllowEmptyString()][string]$Launch
     )
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072
     $encodage = New-Object System.Text.UTF8Encoding $false
     $corps = $encodage.GetBytes($Json)
+    $entetes = @{}
+    if ($Jeton) { $entetes['Authorization'] = 'Bearer ' + $Jeton }
+    elseif ($Launch) { $entetes['X-Sante-Launch'] = $Launch }
     try {
-        $reponse = Invoke-RestMethod -Uri $script:SanteIngestUrl -Method Post -ContentType 'application/json; charset=utf-8' -Headers @{ Authorization = ('Bearer ' + $Jeton) } -Body $corps -TimeoutSec 30
+        $reponse = Invoke-RestMethod -Uri $script:SanteIngestUrl -Method Post -ContentType 'application/json; charset=utf-8' -Headers $entetes -Body $corps -TimeoutSec 30
         $identifiant = ''
         if ($null -ne $reponse -and $null -ne $reponse.reportId) {
             $identifiant = [string]$reponse.reportId
@@ -1829,6 +1892,7 @@ function Publish-SanteEnvironnementEnfant {
     $anciensProcess = @{
         SANTE_TOKEN      = $env:SANTE_TOKEN
         SANTE_LABEL      = $env:SANTE_LABEL
+        SANTE_LAUNCH     = $env:SANTE_LAUNCH
         SANTE_NO_UPLOAD  = $env:SANTE_NO_UPLOAD
         SANTE_UPLOAD     = $env:SANTE_UPLOAD
         SANTE_PASSE      = $env:SANTE_PASSE
@@ -1838,6 +1902,7 @@ function Publish-SanteEnvironnementEnfant {
     $env:SANTE_RELAUNCHED = '1'
     if ($null -ne $Options -and $Options.Token) { $env:SANTE_TOKEN = [string]$Options.Token }
     if ($null -ne $Options -and $Options.Label) { $env:SANTE_LABEL = [string]$Options.Label }
+    if ($null -ne $Options -and $Options.Launch) { $env:SANTE_LAUNCH = [string]$Options.Launch }
     if ($null -ne $Options -and $Options.NoUpload) {
         $env:SANTE_NO_UPLOAD = '1'
         Remove-Item Env:\SANTE_UPLOAD -ErrorAction SilentlyContinue
@@ -1849,6 +1914,7 @@ function Publish-SanteEnvironnementEnfant {
     $voulus = @{
         SANTE_TOKEN      = $env:SANTE_TOKEN
         SANTE_LABEL      = $env:SANTE_LABEL
+        SANTE_LAUNCH     = $env:SANTE_LAUNCH
         SANTE_NO_UPLOAD  = $env:SANTE_NO_UPLOAD
         SANTE_UPLOAD     = $env:SANTE_UPLOAD
         SANTE_PASSE      = $env:SANTE_PASSE
@@ -1915,10 +1981,6 @@ function Invoke-SantePc {
     Write-Host $script:SanteUrl
 
     if ($null -eq $Options) { $Options = Get-SanteOptions -Arguments @() }
-    if ((-not $Options.NoUpload) -and (-not $Options.Token) -and $Options.Upload) {
-        $saisi = Read-SanteJeton
-        if ($saisi) { $Options.Token = $saisi.Trim() }
-    }
 
     if (($Passe -eq 'Complete') -and $Relancer) {
         $admin = $false
@@ -1963,11 +2025,14 @@ function Invoke-SantePc {
         $rapport = New-SanteRapport -Lignes $lignes.ToArray() -Passe $Passe -Options $Options
         $cheminRapport = Save-SanteRapportLocal -Json $rapport.Json
         if ($cheminRapport) { Write-Host ('Rapport local : ' + $cheminRapport) }
-        $jetonEnvoi = Resolve-SanteJetonEnvoi -Options $Options
-        if ($jetonEnvoi) {
-            Write-SanteApercuEnvoi -Rapport $rapport -Jeton $jetonEnvoi
-            Send-SanteRapport -Json $rapport.Json -Jeton $jetonEnvoi
+        if (Test-SanteEnvoiDemande -Options $Options) {
+            $jetonEnvoi = Resolve-SanteJetonEnvoi -Options $Options
+            $launchEnvoi = $null
+            if ($null -ne $Options -and $Options.Launch) { $launchEnvoi = [string]$Options.Launch }
+            Write-SanteApercuEnvoi -Rapport $rapport -Jeton $jetonEnvoi -Launch $launchEnvoi
+            Send-SanteRapport -Json $rapport.Json -Jeton $jetonEnvoi -Launch $launchEnvoi
             $jetonEnvoi = $null
+            $launchEnvoi = $null
         }
     }
     catch {
