@@ -1,4 +1,4 @@
-# Santé PC 1.1.1
+﻿# Santé PC 1.1.1
 # Lecture seule des traces déjà enregistrées par Windows.
 # Pas de paramètre en tête : iex ne le relie pas aux arguments.
 # Le script ne s'arrête pas par un code de sortie : le résultat est l'objet récapitulatif.
